@@ -22,6 +22,7 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 
+extern crate bio;
 extern crate libc;
 extern crate rust_htslib;
 
@@ -35,6 +36,8 @@ use std::sync::{Arc, Mutex};
 use rust_htslib::bam::header::{Header, HeaderRecord};
 use rust_htslib::bam::record::Record;
 use rust_htslib::bam::HeaderView;
+
+use bio::io::fastq;
 
 // include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -248,6 +251,79 @@ impl BwaAligner {
         }
     }
 
+    /// Align an array of fastq records to the reference
+    pub fn align_fastq_records(&self, records: &[fastq::Record], paired: bool) -> Vec<Record> {
+        let cnames = records
+            .iter()
+            .map(|rec| CString::new(&*rec.id()).unwrap().into_raw())
+            .collect::<Vec<_>>();
+
+        let mut vseqs = records
+            .iter()
+            .map(|rec| Vec::from(rec.seq()))
+            .collect::<Vec<_>>();
+        let mut vquals = records
+            .iter()
+            .map(|rec| Vec::from(rec.qual()))
+            .collect::<Vec<_>>();
+
+        let mut bseqs = Vec::new();
+        for i in 0..cnames.len() {
+            let bseq = bwa_sys::bseq1_t {
+                l_seq: vseqs[i].len() as i32,
+                name: cnames[i],
+                seq: vseqs[i].as_mut_ptr() as *mut i8,
+                qual: vquals[i].as_mut_ptr() as *mut i8,
+                comment: std::ptr::null_mut(),
+                id: i as i32,
+                sam: std::ptr::null_mut(),
+            };
+            bseqs.push(bseq);
+        }
+
+        unsafe {
+            let r = *(self.reference.bwt_data);
+            let mut settings = self.settings.bwa_settings;
+            if paired {
+                settings.flag |= bwa_sys::MEM_F_PE as i32;
+            } else {
+                settings.flag &= !(bwa_sys::MEM_F_PE as i32);
+            }
+            bwa_sys::mem_process_seqs(
+                &settings,
+                r.bwt,
+                r.bns,
+                r.pac,
+                0,
+                bseqs.len() as i32,
+                bseqs.as_mut_ptr(),
+                self.pe_stats.inner.as_ptr(),
+            );
+        }
+
+        let sams = bseqs
+            .iter()
+            .map(|b| unsafe { CStr::from_ptr(b.sam) })
+            .collect::<Vec<_>>();
+
+        let mut recs: Vec<Record> = Vec::new();
+        for i in 0..sams.len() {
+            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
+                recs.push(rec);
+            }
+        }
+
+        for bseq in bseqs {
+            unsafe {
+                libc::free(bseq.name as *mut libc::c_void);
+                libc::free(bseq.sam as *mut libc::c_void);
+                libc::free(bseq.comment as *mut libc::c_void);
+            }
+        }
+
+        recs
+    }
+
     /// Align an array of reads to the reference
     pub fn align_reads(
         &self,
@@ -412,6 +488,8 @@ impl BwaAligner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    extern crate itertools;
+    use tests::itertools::Itertools;
 
     fn load_aligner() -> BwaAligner {
         let aln = BwaAligner::from_path("tests/test_ref.fa");
@@ -490,5 +568,21 @@ mod tests {
         assert_eq!(recs[2].pos(), 931375);
         assert_eq!(recs[3].pos(), 932605);
         assert_eq!(recs[4].pos(), 932937);
+    }
+
+    fn read_fastq() -> Result<Vec<fastq::Record>, bio::io::fastq::Error> {
+        let reader1 = fastq::Reader::from_file("tests/test.1.fq").unwrap();
+        let reader2 = fastq::Reader::from_file("tests/test.2.fq").unwrap();
+        let records: Result<Vec<fastq::Record>, _> =
+            reader1.records().interleave(reader2.records()).collect();
+        records
+    }
+
+    #[test]
+    fn test_align_fastqs() {
+        let records = read_fastq().unwrap();
+        let bwa = load_aligner();
+        let recs = bwa.align_fastq_records(&records, true);
+        assert_eq!(recs[0].pos(), 1330);
     }
 }

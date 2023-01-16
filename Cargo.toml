@@ -11,6 +11,10 @@ libc = "*"
 rust-htslib = { version = ">=0.35.2", default-features = false, features = ["serde_feature"] }
 bwa-sys = { path = "bwa-sys" }
 thiserror = "1"
+bio = "1.1.0"
+
+[dev-dependencies]
+itertools = "0.10.5"
 
 [profile.release]
 debug = 1
