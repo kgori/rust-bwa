@@ -248,6 +248,79 @@ impl BwaAligner {
         }
     }
 
+    /// Align an array of reads to the reference
+    pub fn align_reads(
+        &self,
+        names: &[&[u8]],
+        seqs: &[&[u8]],
+        quals: &[&[u8]],
+        paired: bool,
+    ) -> Vec<Record> {
+        let cnames = names
+            .iter()
+            .map(|n| CString::new(*n).unwrap().into_raw())
+            .collect::<Vec<_>>();
+
+        let mut vseqs = seqs.iter().map(|s| Vec::from(*s)).collect::<Vec<_>>();
+        let mut vquals = quals.iter().map(|q| Vec::from(*q)).collect::<Vec<_>>();
+
+        let mut bseqs = Vec::new();
+        for i in 0..names.len() {
+            let bseq = bwa_sys::bseq1_t {
+                l_seq: vseqs[i].len() as i32,
+                name: cnames[i],
+                seq: vseqs[i].as_mut_ptr() as *mut i8,
+                qual: vquals[i].as_mut_ptr() as *mut i8,
+                comment: std::ptr::null_mut(),
+                id: i as i32,
+                sam: std::ptr::null_mut(),
+            };
+            bseqs.push(bseq);
+        }
+
+        unsafe {
+            let r = *(self.reference.bwt_data);
+            let mut settings = self.settings.bwa_settings;
+            if paired {
+                settings.flag |= bwa_sys::MEM_F_PE as i32;
+            } else {
+                settings.flag &= !(bwa_sys::MEM_F_PE as i32);
+            }
+            bwa_sys::mem_process_seqs(
+                &settings,
+                r.bwt,
+                r.bns,
+                r.pac,
+                0,
+                bseqs.len() as i32,
+                bseqs.as_mut_ptr(),
+                self.pe_stats.inner.as_ptr(),
+            );
+        }
+
+        let sams = bseqs
+            .iter()
+            .map(|b| unsafe { CStr::from_ptr(b.sam) })
+            .collect::<Vec<_>>();
+
+        let mut recs: Vec<Record> = Vec::new();
+        for i in 0..sams.len() {
+            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
+                recs.push(rec);
+            }
+        }
+
+        for bseq in bseqs {
+            unsafe {
+                libc::free(bseq.name as *mut libc::c_void);
+                libc::free(bseq.sam as *mut libc::c_void);
+                libc::free(bseq.comment as *mut libc::c_void);
+            }
+        }
+
+        recs
+    }
+
     /// Align a read-pair to the reference.
     pub fn align_read_pair(
         &self,
@@ -401,5 +474,21 @@ mod tests {
             reference.create_bam_header().to_bytes().as_slice(),
             &hdr[..]
         );
+    }
+
+    #[test]
+    fn test_align_reads() {
+        let simple = read_simple();
+        let split = read_split();
+        let names = vec![simple[0], simple[0], split[0], split[0]];
+        let seqs = vec![simple[1], simple[3], split[1], split[3]];
+        let quals = vec![simple[2], simple[4], split[2], split[4]];
+        let bwa = load_aligner();
+        let recs = bwa.align_reads(&names, &seqs, &quals, true);
+        assert_eq!(recs[0].pos(), 727806);
+        assert_eq!(recs[1].pos(), 727435);
+        assert_eq!(recs[2].pos(), 931375);
+        assert_eq!(recs[3].pos(), 932605);
+        assert_eq!(recs[4].pos(), 932937);
     }
 }
