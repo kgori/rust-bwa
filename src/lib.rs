@@ -27,8 +27,9 @@ extern crate libc;
 extern crate rust_htslib;
 
 extern crate thiserror;
+extern crate bwa_sys;
 
-use std::ffi::{CStr, CString};
+use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
 use std::ptr;
 use std::sync::{Arc, Mutex};
@@ -38,6 +39,7 @@ use rust_htslib::bam::record::Record;
 use rust_htslib::bam::HeaderView;
 
 use bio::io::fastq;
+use bwa_sys::bseq1_t;
 
 // include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -253,34 +255,13 @@ impl BwaAligner {
 
     /// Align an array of fastq records to the reference
     pub fn align_fastq_records(&self, records: &[fastq::Record], paired: bool) -> Vec<Record> {
-        let cnames = records
-            .iter()
-            .map(|rec| CString::new(&*rec.id()).unwrap().into_raw())
-            .collect::<Vec<_>>();
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let mut bseqs = Self::construct_bseqs(cnames, &mut vseqs, &mut vquals);
+        self.align_bseqs(paired, &mut bseqs);
+        self.bseqs_to_bam_records(bseqs)
+    }
 
-        let mut vseqs = records
-            .iter()
-            .map(|rec| Vec::from(rec.seq()))
-            .collect::<Vec<_>>();
-        let mut vquals = records
-            .iter()
-            .map(|rec| Vec::from(rec.qual()))
-            .collect::<Vec<_>>();
-
-        let mut bseqs = Vec::new();
-        for i in 0..cnames.len() {
-            let bseq = bwa_sys::bseq1_t {
-                l_seq: vseqs[i].len() as i32,
-                name: cnames[i],
-                seq: vseqs[i].as_mut_ptr() as *mut i8,
-                qual: vquals[i].as_mut_ptr() as *mut i8,
-                comment: std::ptr::null_mut(),
-                id: i as i32,
-                sam: std::ptr::null_mut(),
-            };
-            bseqs.push(bseq);
-        }
-
+    fn align_bseqs(&self, paired: bool, bseqs: &mut Vec<bseq1_t>) {
         unsafe {
             let r = *(self.reference.bwt_data);
             let mut settings = self.settings.bwa_settings;
@@ -300,7 +281,42 @@ impl BwaAligner {
                 self.pe_stats.inner.as_ptr(),
             );
         }
+    }
 
+    fn construct_bseqs(cnames: Vec<*mut c_char>, vseqs: &mut Vec<Vec<u8>>, vquals: &mut Vec<Vec<u8>>) -> Vec<bseq1_t> {
+        let mut bseqs = Vec::new();
+        for i in 0..cnames.len() {
+            let bseq = bwa_sys::bseq1_t {
+                l_seq: vseqs[i].len() as i32,
+                name: cnames[i],
+                seq: vseqs[i].as_mut_ptr() as *mut i8,
+                qual: vquals[i].as_mut_ptr() as *mut i8,
+                comment: std::ptr::null_mut(),
+                id: i as i32,
+                sam: std::ptr::null_mut(),
+            };
+            bseqs.push(bseq);
+        }
+        bseqs
+    }
+
+    fn extract_fastqs(records: &[fastq::Record]) -> (Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let cnames = records
+            .iter()
+            .map(|rec| CString::new(&*rec.id()).unwrap().into_raw())
+            .collect::<Vec<_>>();
+        let vseqs = records
+            .iter()
+            .map(|rec| Vec::from(rec.seq()))
+            .collect::<Vec<_>>();
+        let vquals = records
+            .iter()
+            .map(|rec| Vec::from(rec.qual()))
+            .collect::<Vec<_>>();
+        (cnames, vseqs, vquals)
+    }
+
+    fn bseqs_to_bam_records(&self, bseqs: Vec<bseq1_t>) -> Vec<Record> {
         let sams = bseqs
             .iter()
             .map(|b| unsafe { CStr::from_ptr(b.sam) })
