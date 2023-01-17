@@ -26,8 +26,8 @@ extern crate bio;
 extern crate libc;
 extern crate rust_htslib;
 
-extern crate thiserror;
 extern crate bwa_sys;
+extern crate thiserror;
 
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
@@ -253,6 +253,20 @@ impl BwaAligner {
         }
     }
 
+    pub fn do_reads_align(&self, records: &[fastq::Record], paired: bool) -> Vec<bool> {
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
+        self.align_bseqs(paired, &mut bseqs);
+        let sams = bseqs.to_sams();
+        sams.iter()
+            .map(|s| {
+                self.parse_sam_to_records(s.to_bytes())
+                    .iter()
+                    .any(|r| !r.is_unmapped())
+            })
+            .collect()
+    }
+
     /// Align an array of fastq records to the reference
     pub fn align_fastq_records(&self, records: &[fastq::Record], paired: bool) -> Vec<Record> {
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
@@ -309,8 +323,6 @@ impl BwaAligner {
             .collect::<Vec<_>>();
         (cnames, vseqs, vquals)
     }
-
-
 
     /// Align an array of reads to the reference
     pub fn align_reads(
@@ -474,11 +486,15 @@ impl BwaAligner {
 }
 
 struct BseqVec {
-    inner: Vec<bseq1_t>
+    inner: Vec<bseq1_t>,
 }
 
 impl BseqVec {
-    fn new(cnames: Vec<*mut c_char>, vseqs: &mut Vec<Vec<u8>>, vquals: &mut Vec<Vec<u8>>) -> BseqVec {
+    fn new(
+        cnames: Vec<*mut c_char>,
+        vseqs: &mut Vec<Vec<u8>>,
+        vquals: &mut Vec<Vec<u8>>,
+    ) -> BseqVec {
         let mut bseqs = Vec::new();
         for i in 0..cnames.len() {
             let bseq = bwa_sys::bseq1_t {
@@ -496,7 +512,8 @@ impl BseqVec {
     }
 
     fn to_sams(&self) -> Vec<&CStr> {
-        let sams = self.inner
+        let sams = self
+            .inner
             .iter()
             .map(|b| unsafe { CStr::from_ptr(b.sam) })
             .collect::<Vec<_>>();
@@ -615,5 +632,26 @@ mod tests {
         let bwa = load_aligner();
         let recs = bwa.align_fastq_records(&records, true);
         assert_eq!(recs[0].pos(), 1330);
+    }
+
+    #[test]
+    fn test_do_reads_align() {
+        let records = read_fastq().unwrap();
+        let bwa = load_aligner();
+        let result = bwa.do_reads_align(&records, true);
+        assert!(result[0]);
+        assert!(result[1]);
+        assert!(result[2]);
+        assert!(result[3]);
+        assert!(result[4]);
+        assert!(result[5]);
+        assert!(result[6]);
+        assert!(result[7]);
+        assert!(result[8]);
+        assert!(result[9]);
+        assert!(result[10]);
+        assert!(result[11]);
+        assert!(!result[12]);
+        assert!(!result[13]);
     }
 }
