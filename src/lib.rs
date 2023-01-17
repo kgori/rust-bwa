@@ -256,6 +256,9 @@ impl BwaAligner {
         }
     }
 
+    /// Align an array of bio::io::fastq::Records to the reference and return a Vec<bool>
+    /// to indicate whether each fastq::Record mapped to the reference (true) or was
+    /// unmapped (false).
     pub fn get_alignment_status(
         &self,
         records: &[fastq::Record],
@@ -279,12 +282,26 @@ impl BwaAligner {
         }
     }
 
-    /// Align an array of fastq records to the reference
+    fn validate_paired_records(records: &[fastq::Record], paired: bool) -> Result<(), BwaAlignmentError> {
+        if paired {
+            if records.len() & 1 == 1 {
+                return Err(BwaAlignmentError("Expected an even number of paired reads".to_string()));
+            }
+            if records.chunks(2).any(|a| a[0].id() != a[1].id()) {
+                return Err(BwaAlignmentError("Paired read names don't match".to_string()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Align an array of bio::io::fastq::Records to the reference and return a Vec
+    /// of alignments as rust_htslib::bam::Records
     pub fn align_fastq_records(
         &self,
         records: &[fastq::Record],
         paired: bool,
     ) -> Result<Vec<Record>, BwaAlignmentError> {
+        Self::validate_paired_records(records, paired)?;
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, &mut bseqs);
@@ -295,12 +312,14 @@ impl BwaAligner {
         }
     }
 
-    /// Align an array of fastq records to the reference
+    /// Align an array of fastq records to the reference and return a Vec
+    /// of subalignments for each fastq::record as a Vec of bam::Records.
     pub fn align_fastq_records_nested(
         &self,
         records: &[fastq::Record],
         paired: bool,
     ) -> Result<Vec<Vec<Record>>, BwaAlignmentError> {
+        Self::validate_paired_records(records, paired)?;
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, &mut bseqs);
