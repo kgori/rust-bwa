@@ -572,4 +572,20 @@ mod tests {
         assert!(!result[12]);
         assert!(!result[13]);
     }
+
+    #[test]
+    fn test_odd_paired_reads_throw_error() {
+        let records = &read_fastq().unwrap()[..3];
+        let bwa = load_aligner();
+        assert!(bwa.align_fastq_records(&records, true).is_err());
+    }
+
+    #[test]
+    fn test_unordered_reads_throw_error() {
+        let mut records_1 = read_fastq().unwrap().into_iter().step_by(2).collect::<Vec<fastq::Record>>();
+        let mut records_2 = read_fastq().unwrap().into_iter().skip(1).step_by(2).collect::<Vec<fastq::Record>>();
+        records_1.append(&mut records_2);
+        let bwa = load_aligner();
+        assert!(bwa.align_fastq_records(records_1.as_slice(), true).is_err());
+    }
 }
