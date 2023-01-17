@@ -1,30 +1,68 @@
-# Rust-bwa 
+# Rust-bwa
+(forked from 10XGenomics)
 
-Rust-bwa is a Rust wrapper of the BWA api. Pass read-pair information in, and get Rust-htslib BAM records back.
-Get started quickly with default settings & a reasonable paired-end model. See docs for more details on customing
-parameters or the paired-end model.
+Rust-bwa is a Rust wrapper of the BWA api. Pass bio::io::fastq::Records in and get rust_htslib::bam::Records back.
 
 ```
+extern crate bio;
 extern crate bwa;
-use bwa::BwaAligner;
+
+use bio::io::fastq;
+use bwa::{BwaAligner, BwaReference};
+use rust_htslib::bam;
 
 fn main() {
-    let bwa = BwaAligner::from_path(&"tests/test_ref.fa").unwrap();
+    let aligner = BwaAligner::from_path("/Users/kg8/Downloads/rust-bwa/tests/test_ref.fa").unwrap();
+    let bam_header = aligner.create_bam_header();
 
-    let r1 = b"GATGGCTGCGCAAGGGTTCTTACTGATCGCCACGTTTTTACTGGTGTTAATGGTGCTGGCGCGTCCTTTAGGCAGCGGG";
-    let q1 = b"2222222222222222222222222222222222222222222222222222222222222222222222222222222";
-    let r2 = b"TGCTGCGTAGCAGATCGACCCAGGCATTCCCTAGCGTGCTCATGCTCTGGCTGGTAAACGCACGGATGAGGGCAAAAAT";
-    let q2 = b"2222222222222222222222222222222222222222222222222222222222222222222222222222222";
+    let seqs = vec![
+        fastq::Record::with_attrs(
+            "id",
+            Some("/1"),
+            b"TCATTGCTTATTATGTTCATCCCGTCAACATTCAAACGGCCTGTCTCATCATGGAAGGCGCTGAATTTAC",
+            b"JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+        ),
+        fastq::Record::with_attrs(
+            "id",
+            Some("/2"),
+            b"GGAAAACATTATTAATGGCGTCGAGCGTCCGGTTAAAGCCGCTGAATTGTTCGCGTTTACCTTGCGTGTA",
+            b"IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII",
+        ),
+    ];
 
-    let (r1_alns, _r2_alns) = bwa.align_read_pair(b"read_name", r1, q1, r2, q2).unwrap();
-    println!("r1 mapping -- tid: {}, pos: {}", r1_alns[0].tid(), r1_alns[0].pos());
+    // Align the sequences. Result is nested as a Vec<Vec<bam::Record>>.
+    // Each input sequence produces a Vec<bam::Record> containing its principal
+    // alignment and any split or supplementary alignments.
+    let alns = aligner.align_fastq_records_nested(&seqs, true).unwrap();
+    
+    // Write the alignments to stdout
+    let mut writer = bam::Writer::from_stdout(&bam_header, bam::Format::Sam).unwrap();
+    for aln in alns {
+        for rec in aln {
+            writer.write(&rec).unwrap();
+        }
+    }
 }
 ```
 
 Pre-built rust bindings were generated using `bindgen` for linux using the command:
 
 ```
-~/.cargo/bin/bindgen --no-doc-comments --whitelist-function mem_align1_core --whitelist-function mem_sam_pe --whitelist-function mem_opt_init --whitelist-function bwa_idx_load --whitelist-function bwa_idx_destroy --whitelist-function mem_process_seq_pe --whitelist-function bwa_fill_scmat --whitelist-var "BWA_IDX_.*" wrapper.h -o linux_prebuilt_bindings.rs
+~/.cargo/bin/bindgen \
+  --no-doc-comments \
+  --allowlist-function mem_align1_core \
+  --allowlist-function mem_sam_pe \
+  --allowlist-function mem_opt_init \
+  --allowlist-function bwa_idx_load \
+  --allowlist-function bwa_idx_destroy \
+  --allowlist-function mem_process_seq_pe \
+  --allowlist-function mem_process_seqs \
+  --allowlist-function mem_align1 \
+  --allowlist-function bwa_fill_scmat \
+  --allowlist-var "BWA_IDX_.*" \
+  --allowlist-var "MEM_F_.*" \
+  wrapper.h \
+  -o src/lib.rs
 ```
 
 `bindgen` can be installed using `cargo install bindgen`. See the documentation [here](https://rust-lang.github.io/rust-bindgen/command-line-usage.html).
