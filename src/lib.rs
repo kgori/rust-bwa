@@ -102,6 +102,10 @@ impl BwaSettings {
 #[error("{0}")]
 pub struct ReferenceError(String);
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct BwaAlignmentError(String);
+
 /// A BWA reference object to perform alignments to.
 /// Must be loaded from a BWA index created with `bwa index`
 pub struct BwaReference {
@@ -253,27 +257,43 @@ impl BwaAligner {
         }
     }
 
-    pub fn do_reads_align(&self, records: &[fastq::Record], paired: bool) -> Vec<bool> {
+    pub fn do_reads_align(
+        &self,
+        records: &[fastq::Record],
+        paired: bool,
+    ) -> Result<Vec<bool>, BwaAlignmentError> {
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, &mut bseqs);
-        let sams = bseqs.to_sams();
-        sams.iter()
-            .map(|s| {
-                self.parse_sam_to_records(s.to_bytes())
-                    .iter()
-                    .any(|r| !r.is_unmapped())
-            })
-            .collect()
+
+        if let Some(sams) = bseqs.to_sams() {
+            Ok(sams
+                .iter()
+                .map(|s| {
+                    self.parse_sam_to_records(s.to_bytes())
+                        .iter()
+                        .any(|r| !r.is_unmapped())
+                })
+                .collect())
+        } else {
+            Err(BwaAlignmentError("An alignment error occurred".to_string()))
+        }
     }
 
     /// Align an array of fastq records to the reference
-    pub fn align_fastq_records(&self, records: &[fastq::Record], paired: bool) -> Vec<Record> {
+    pub fn align_fastq_records(
+        &self,
+        records: &[fastq::Record],
+        paired: bool,
+    ) -> Result<Vec<Record>, BwaAlignmentError> {
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, &mut bseqs);
-        let sams = bseqs.to_sams();
-        self.sams_to_bam_records(sams)
+        if let Some(sams) = bseqs.to_sams() {
+            Ok(self.sams_to_bam_records(sams))
+        } else {
+            Err(BwaAlignmentError("An alignment error occurred".to_string()))
+        }
     }
 
     fn sams_to_bam_records(&self, sams: Vec<&CStr>) -> Vec<Record> {
@@ -306,6 +326,7 @@ impl BwaAligner {
                 self.pe_stats.inner.as_ptr(),
             );
         }
+        bseqs.aligned = true;
     }
 
     fn extract_fastqs(records: &[fastq::Record]) -> (Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
@@ -485,39 +506,44 @@ impl BwaAligner {
     }
 }
 
+/// A wrapper around a vector of the BWA sequence type bseq1_t
 struct BseqVec {
     inner: Vec<bseq1_t>,
+    aligned: bool,
 }
 
 impl BseqVec {
-    fn new(
-        cnames: Vec<*mut c_char>,
-        vseqs: &mut Vec<Vec<u8>>,
-        vquals: &mut Vec<Vec<u8>>,
-    ) -> BseqVec {
+    fn new(names: Vec<*mut c_char>, seqs: &mut Vec<Vec<u8>>, quals: &mut Vec<Vec<u8>>) -> BseqVec {
         let mut bseqs = Vec::new();
-        for i in 0..cnames.len() {
+        for i in 0..names.len() {
             let bseq = bwa_sys::bseq1_t {
-                l_seq: vseqs[i].len() as i32,
-                name: cnames[i],
-                seq: vseqs[i].as_mut_ptr() as *mut i8,
-                qual: vquals[i].as_mut_ptr() as *mut i8,
+                l_seq: seqs[i].len() as i32,
+                name: names[i],
+                seq: seqs[i].as_mut_ptr() as *mut i8,
+                qual: quals[i].as_mut_ptr() as *mut i8,
                 comment: std::ptr::null_mut(),
                 id: i as i32,
                 sam: std::ptr::null_mut(),
             };
             bseqs.push(bseq);
         }
-        BseqVec { inner: bseqs }
+        BseqVec {
+            inner: bseqs,
+            aligned: false,
+        }
     }
 
-    fn to_sams(&self) -> Vec<&CStr> {
+    /// Extracts the SAM information from the aligned bseq1_ts as a vec of &CStr
+    fn to_sams(&self) -> Option<Vec<&CStr>> {
+        if !self.aligned {
+            return None;
+        }
         let sams = self
             .inner
             .iter()
             .map(|b| unsafe { CStr::from_ptr(b.sam) })
             .collect::<Vec<_>>();
-        sams
+        Some(sams)
     }
 }
 
@@ -630,7 +656,7 @@ mod tests {
     fn test_align_fastqs() {
         let records = read_fastq().unwrap();
         let bwa = load_aligner();
-        let recs = bwa.align_fastq_records(&records, true);
+        let recs = bwa.align_fastq_records(&records, true).unwrap();
         assert_eq!(recs[0].pos(), 1330);
     }
 
@@ -638,7 +664,7 @@ mod tests {
     fn test_do_reads_align() {
         let records = read_fastq().unwrap();
         let bwa = load_aligner();
-        let result = bwa.do_reads_align(&records, true);
+        let result = bwa.do_reads_align(&records, true).unwrap();
         assert!(result[0]);
         assert!(result[1]);
         assert!(result[2]);
