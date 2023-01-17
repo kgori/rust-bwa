@@ -31,7 +31,6 @@ extern crate thiserror;
 
 use std::ffi::{c_char, CStr, CString};
 use std::path::Path;
-use std::ptr;
 use std::sync::{Arc, Mutex};
 
 use rust_htslib::bam::header::{Header, HeaderRecord};
@@ -296,14 +295,29 @@ impl BwaAligner {
         }
     }
 
-    fn sams_to_bam_records(&self, sams: Vec<&CStr>) -> Vec<Record> {
-        let mut recs: Vec<Record> = Vec::new();
-        for i in 0..sams.len() {
-            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
-                recs.push(rec);
-            }
+    /// Align an array of fastq records to the reference
+    pub fn align_fastq_records_nested(
+        &self,
+        records: &[fastq::Record],
+        paired: bool,
+    ) -> Result<Vec<Vec<Record>>, BwaAlignmentError> {
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
+        self.align_bseqs(paired, &mut bseqs);
+        if let Some(sams) = bseqs.to_sams() {
+            Ok(sams
+                .iter()
+                .map(|s| self.parse_sam_to_records(s.to_bytes()))
+                .collect())
+        } else {
+            Err(BwaAlignmentError("An alignment error occurred".to_string()))
         }
-        recs
+    }
+
+    fn sams_to_bam_records(&self, sams: Vec<&CStr>) -> Vec<Record> {
+        sams.iter()
+            .flat_map(|s| self.parse_sam_to_records(s.to_bytes()))
+            .collect()
     }
 
     fn align_bseqs(&self, paired: bool, bseqs: &mut BseqVec) {
@@ -332,7 +346,7 @@ impl BwaAligner {
     fn extract_fastqs(records: &[fastq::Record]) -> (Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
         let cnames = records
             .iter()
-            .map(|rec| CString::new(&*rec.id()).unwrap().into_raw())
+            .map(|rec| CString::new(rec.id()).unwrap().into_raw())
             .collect::<Vec<_>>();
         let vseqs = records
             .iter()
@@ -345,79 +359,6 @@ impl BwaAligner {
         (cnames, vseqs, vquals)
     }
 
-    /// Align an array of reads to the reference
-    pub fn align_reads(
-        &self,
-        names: &[&[u8]],
-        seqs: &[&[u8]],
-        quals: &[&[u8]],
-        paired: bool,
-    ) -> Vec<Record> {
-        let cnames = names
-            .iter()
-            .map(|n| CString::new(*n).unwrap().into_raw())
-            .collect::<Vec<_>>();
-
-        let mut vseqs = seqs.iter().map(|s| Vec::from(*s)).collect::<Vec<_>>();
-        let mut vquals = quals.iter().map(|q| Vec::from(*q)).collect::<Vec<_>>();
-
-        let mut bseqs = Vec::new();
-        for i in 0..names.len() {
-            let bseq = bwa_sys::bseq1_t {
-                l_seq: vseqs[i].len() as i32,
-                name: cnames[i],
-                seq: vseqs[i].as_mut_ptr() as *mut i8,
-                qual: vquals[i].as_mut_ptr() as *mut i8,
-                comment: std::ptr::null_mut(),
-                id: i as i32,
-                sam: std::ptr::null_mut(),
-            };
-            bseqs.push(bseq);
-        }
-
-        unsafe {
-            let r = *(self.reference.bwt_data);
-            let mut settings = self.settings.bwa_settings;
-            if paired {
-                settings.flag |= bwa_sys::MEM_F_PE as i32;
-            } else {
-                settings.flag &= !(bwa_sys::MEM_F_PE as i32);
-            }
-            bwa_sys::mem_process_seqs(
-                &settings,
-                r.bwt,
-                r.bns,
-                r.pac,
-                0,
-                bseqs.len() as i32,
-                bseqs.as_mut_ptr(),
-                self.pe_stats.inner.as_ptr(),
-            );
-        }
-
-        let sams = bseqs
-            .iter()
-            .map(|b| unsafe { CStr::from_ptr(b.sam) })
-            .collect::<Vec<_>>();
-
-        let mut recs: Vec<Record> = Vec::new();
-        for i in 0..sams.len() {
-            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
-                recs.push(rec);
-            }
-        }
-
-        for bseq in bseqs {
-            unsafe {
-                libc::free(bseq.name as *mut libc::c_void);
-                libc::free(bseq.sam as *mut libc::c_void);
-                libc::free(bseq.comment as *mut libc::c_void);
-            }
-        }
-
-        recs
-    }
-
     /// Align a read-pair to the reference.
     pub fn align_read_pair(
         &self,
@@ -427,66 +368,14 @@ impl BwaAligner {
         r2: &[u8],
         q2: &[u8],
     ) -> (Vec<Record>, Vec<Record>) {
-        let name = CString::new(name).unwrap();
-        let raw_name = name.into_raw();
+        let read1 = fastq::Record::with_attrs(std::str::from_utf8(name).unwrap(), None, r1, q1);
 
-        // Prep input data -- need to make copy of reads since BWA will edit the strings in-place
-        // FIXME - set an id -- used for a random hash
-        let mut r1 = Vec::from(r1);
-        let mut q1 = Vec::from(q1);
-        let mut r2 = Vec::from(r2);
-        let mut q2 = Vec::from(q2);
+        let read2 = fastq::Record::with_attrs(std::str::from_utf8(name).unwrap(), None, r2, q2);
 
-        let read1 = bwa_sys::bseq1_t {
-            l_seq: r1.len() as i32,
-            name: raw_name,
-            seq: r1.as_mut_ptr() as *mut i8,
-            qual: q1.as_mut_ptr() as *mut i8,
-            comment: ptr::null_mut(),
-            id: 0,
-            sam: ptr::null_mut(),
-        };
-
-        let read2 = bwa_sys::bseq1_t {
-            l_seq: r2.len() as i32,
-            name: raw_name,
-            seq: r2.as_mut_ptr() as *mut i8,
-            qual: q2.as_mut_ptr() as *mut i8,
-            comment: ptr::null_mut(),
-            id: 0,
-            sam: ptr::null_mut(),
-        };
-
-        let mut reads = [read1, read2];
-
-        // Align the read pair. BWA will write the SAM data back to the bwa_sys::bseq1_t.sam field
-        unsafe {
-            let r = *(self.reference.bwt_data);
-            let settings = self.settings.bwa_settings;
-            bwa_sys::mem_process_seq_pe(
-                &settings,
-                r.bwt,
-                r.bns,
-                r.pac,
-                reads.as_mut_ptr(),
-                self.pe_stats.inner.as_ptr(),
-            );
-            let _ = CString::from_raw(raw_name);
-        }
-
-        // Parse the results from the SAM output & convert the htslib Records
-        let sam1 = unsafe { CStr::from_ptr(reads[0].sam) };
-        let sam2 = unsafe { CStr::from_ptr(reads[1].sam) };
-
-        let recs1 = self.parse_sam_to_records(sam1.to_bytes());
-        let recs2 = self.parse_sam_to_records(sam2.to_bytes());
-
-        unsafe {
-            libc::free(reads[0].sam as *mut libc::c_void);
-            libc::free(reads[1].sam as *mut libc::c_void);
-        }
-
-        (recs1, recs2)
+        let reads = vec![read1, read2];
+        let aln = self.align_fastq_records_nested(&reads, true).unwrap();
+        let mut it = aln.iter();
+        (it.next().unwrap().to_vec(), it.next().unwrap().to_vec())
     }
 
     fn parse_sam_to_records(&self, sam: &[u8]) -> Vec<Record> {
@@ -513,7 +402,7 @@ struct BseqVec {
 }
 
 impl BseqVec {
-    fn new(names: Vec<*mut c_char>, seqs: &mut Vec<Vec<u8>>, quals: &mut Vec<Vec<u8>>) -> BseqVec {
+    fn new(names: Vec<*mut c_char>, seqs: &mut [Vec<u8>], quals: &mut [Vec<u8>]) -> BseqVec {
         let mut bseqs = Vec::new();
         for i in 0..names.len() {
             let bseq = bwa_sys::bseq1_t {
@@ -626,22 +515,6 @@ mod tests {
             reference.create_bam_header().to_bytes().as_slice(),
             &hdr[..]
         );
-    }
-
-    #[test]
-    fn test_align_reads() {
-        let simple = read_simple();
-        let split = read_split();
-        let names = vec![simple[0], simple[0], split[0], split[0]];
-        let seqs = vec![simple[1], simple[3], split[1], split[3]];
-        let quals = vec![simple[2], simple[4], split[2], split[4]];
-        let bwa = load_aligner();
-        let recs = bwa.align_reads(&names, &seqs, &quals, true);
-        assert_eq!(recs[0].pos(), 727806);
-        assert_eq!(recs[1].pos(), 727435);
-        assert_eq!(recs[2].pos(), 931375);
-        assert_eq!(recs[3].pos(), 932605);
-        assert_eq!(recs[4].pos(), 932937);
     }
 
     fn read_fastq() -> Result<Vec<fastq::Record>, bio::io::fastq::Error> {
