@@ -256,6 +256,10 @@ impl BwaAligner {
         }
     }
 
+    pub fn create_bam_header(&self) -> Header {
+        self.reference.create_bam_header()
+    }
+
     /// Align an array of bio::io::fastq::Records to the reference and return a Vec<bool>
     /// to indicate whether each fastq::Record mapped to the reference (true) or was
     /// unmapped (false).
@@ -587,5 +591,15 @@ mod tests {
         records_1.append(&mut records_2);
         let bwa = load_aligner();
         assert!(bwa.align_fastq_records(records_1.as_slice(), true).is_err());
+    }
+
+    #[test]
+    fn test_aligner_can_generate_header() {
+        let bwa = load_aligner();
+        let hdr = b"@SQ\tSN:PhiX\tLN:5386\n@SQ\tSN:chr\tLN:4639675";
+        assert_eq!(
+            bwa.create_bam_header().to_bytes().as_slice(),
+            &hdr[..]
+        );
     }
 }
