@@ -257,7 +257,7 @@ impl BwaAligner {
         }
     }
 
-    pub fn do_reads_align(
+    pub fn get_alignment_status(
         &self,
         records: &[fastq::Record],
         paired: bool,
@@ -664,7 +664,7 @@ mod tests {
     fn test_do_reads_align() {
         let records = read_fastq().unwrap();
         let bwa = load_aligner();
-        let result = bwa.do_reads_align(&records, true).unwrap();
+        let result = bwa.get_alignment_status(&records, true).unwrap();
         assert!(result[0]);
         assert!(result[1]);
         assert!(result[2]);
