@@ -256,12 +256,23 @@ impl BwaAligner {
     /// Align an array of fastq records to the reference
     pub fn align_fastq_records(&self, records: &[fastq::Record], paired: bool) -> Vec<Record> {
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
-        let mut bseqs = Self::construct_bseqs(cnames, &mut vseqs, &mut vquals);
+        let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, &mut bseqs);
-        self.bseqs_to_bam_records(bseqs)
+        let sams = bseqs.to_sams();
+        self.sams_to_bam_records(sams)
     }
 
-    fn align_bseqs(&self, paired: bool, bseqs: &mut Vec<bseq1_t>) {
+    fn sams_to_bam_records(&self, sams: Vec<&CStr>) -> Vec<Record> {
+        let mut recs: Vec<Record> = Vec::new();
+        for i in 0..sams.len() {
+            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
+                recs.push(rec);
+            }
+        }
+        recs
+    }
+
+    fn align_bseqs(&self, paired: bool, bseqs: &mut BseqVec) {
         unsafe {
             let r = *(self.reference.bwt_data);
             let mut settings = self.settings.bwa_settings;
@@ -276,28 +287,11 @@ impl BwaAligner {
                 r.bns,
                 r.pac,
                 0,
-                bseqs.len() as i32,
-                bseqs.as_mut_ptr(),
+                bseqs.inner.len() as i32,
+                bseqs.inner.as_mut_ptr(),
                 self.pe_stats.inner.as_ptr(),
             );
         }
-    }
-
-    fn construct_bseqs(cnames: Vec<*mut c_char>, vseqs: &mut Vec<Vec<u8>>, vquals: &mut Vec<Vec<u8>>) -> Vec<bseq1_t> {
-        let mut bseqs = Vec::new();
-        for i in 0..cnames.len() {
-            let bseq = bwa_sys::bseq1_t {
-                l_seq: vseqs[i].len() as i32,
-                name: cnames[i],
-                seq: vseqs[i].as_mut_ptr() as *mut i8,
-                qual: vquals[i].as_mut_ptr() as *mut i8,
-                comment: std::ptr::null_mut(),
-                id: i as i32,
-                sam: std::ptr::null_mut(),
-            };
-            bseqs.push(bseq);
-        }
-        bseqs
     }
 
     fn extract_fastqs(records: &[fastq::Record]) -> (Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
@@ -316,29 +310,7 @@ impl BwaAligner {
         (cnames, vseqs, vquals)
     }
 
-    fn bseqs_to_bam_records(&self, bseqs: Vec<bseq1_t>) -> Vec<Record> {
-        let sams = bseqs
-            .iter()
-            .map(|b| unsafe { CStr::from_ptr(b.sam) })
-            .collect::<Vec<_>>();
 
-        let mut recs: Vec<Record> = Vec::new();
-        for i in 0..sams.len() {
-            for rec in self.parse_sam_to_records(sams[i].to_bytes()) {
-                recs.push(rec);
-            }
-        }
-
-        for bseq in bseqs {
-            unsafe {
-                libc::free(bseq.name as *mut libc::c_void);
-                libc::free(bseq.sam as *mut libc::c_void);
-                libc::free(bseq.comment as *mut libc::c_void);
-            }
-        }
-
-        recs
-    }
 
     /// Align an array of reads to the reference
     pub fn align_reads(
@@ -498,6 +470,49 @@ impl BwaAligner {
         }
 
         records
+    }
+}
+
+struct BseqVec {
+    inner: Vec<bseq1_t>
+}
+
+impl BseqVec {
+    fn new(cnames: Vec<*mut c_char>, vseqs: &mut Vec<Vec<u8>>, vquals: &mut Vec<Vec<u8>>) -> BseqVec {
+        let mut bseqs = Vec::new();
+        for i in 0..cnames.len() {
+            let bseq = bwa_sys::bseq1_t {
+                l_seq: vseqs[i].len() as i32,
+                name: cnames[i],
+                seq: vseqs[i].as_mut_ptr() as *mut i8,
+                qual: vquals[i].as_mut_ptr() as *mut i8,
+                comment: std::ptr::null_mut(),
+                id: i as i32,
+                sam: std::ptr::null_mut(),
+            };
+            bseqs.push(bseq);
+        }
+        BseqVec { inner: bseqs }
+    }
+
+    fn to_sams(&self) -> Vec<&CStr> {
+        let sams = self.inner
+            .iter()
+            .map(|b| unsafe { CStr::from_ptr(b.sam) })
+            .collect::<Vec<_>>();
+        sams
+    }
+}
+
+impl Drop for BseqVec {
+    fn drop(&mut self) {
+        for bseq in &self.inner {
+            unsafe {
+                libc::free(bseq.name as *mut libc::c_void);
+                libc::free(bseq.sam as *mut libc::c_void);
+                libc::free(bseq.comment as *mut libc::c_void);
+            }
+        }
     }
 }
 
