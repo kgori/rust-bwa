@@ -3,12 +3,13 @@
 
 Rust-bwa is a Rust wrapper of the BWA api. Pass bio::io::fastq::Records in and get rust_htslib::bam::Records back.
 
+This fork is modified from the original to align batches of fastq-encoded reads in a single API call.
 ```
 extern crate bio;
 extern crate bwa;
 
 use bio::io::fastq;
-use bwa::{BwaAligner, BwaReference};
+use bwa::BwaAligner;
 use rust_htslib::bam;
 
 fn main() {
@@ -33,7 +34,7 @@ fn main() {
     // Align the sequences. Result is nested as a Vec<Vec<bam::Record>>.
     // Each input sequence produces a Vec<bam::Record> containing its principal
     // alignment and any split or supplementary alignments.
-    let alns = aligner.align_fastq_records_nested(&seqs, true).unwrap();
+    let alns = aligner.align_fastq_records_nested(&seqs, /* paired */ true).unwrap();
     
     // Write the alignments to stdout
     let mut writer = bam::Writer::from_stdout(&bam_header, bam::Format::Sam).unwrap();
