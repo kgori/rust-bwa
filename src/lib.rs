@@ -47,7 +47,7 @@
 //!     ];
 //!
 //! let alns = aligner
-//!     .align_fastq_records_nested(&seqs, /* paired */ true)
+//!     .align_fastq_records_nested(&seqs, /* paired */ true, /* softclip */ false, /* threads */ 1)
 //!     .unwrap();
 //! assert!(alns[0][0].pos() == 630);
 //! assert!(alns[1][0].pos() == 700);
@@ -73,6 +73,7 @@ use rust_htslib::bam::record::Record;
 use rust_htslib::bam::HeaderView;
 
 use bio::io::fastq;
+use libc::c_int;
 use bwa_sys::bseq1_t;
 
 // include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -302,10 +303,12 @@ impl BwaAligner {
         &self,
         records: &[fastq::Record],
         paired: bool,
+        softclip: bool,
+        threads: usize,
     ) -> Result<Vec<bool>, BwaAlignmentError> {
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
-        self.align_bseqs(paired, &mut bseqs);
+        self.align_bseqs(paired, softclip, threads, &mut bseqs);
 
         if let Some(sams) = bseqs.to_sams() {
             Ok(sams
@@ -339,11 +342,13 @@ impl BwaAligner {
         &self,
         records: &[fastq::Record],
         paired: bool,
+        softclip: bool,
+        threads: usize,
     ) -> Result<Vec<Record>, BwaAlignmentError> {
         Self::validate_paired_records(records, paired)?;
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
-        self.align_bseqs(paired, &mut bseqs);
+        self.align_bseqs(paired, softclip, threads, &mut bseqs);
         if let Some(sams) = bseqs.to_sams() {
             Ok(self.sams_to_bam_records(sams))
         } else {
@@ -357,11 +362,13 @@ impl BwaAligner {
         &self,
         records: &[fastq::Record],
         paired: bool,
+        softclip: bool,
+        threads: usize,
     ) -> Result<Vec<Vec<Record>>, BwaAlignmentError> {
         Self::validate_paired_records(records, paired)?;
         let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
-        self.align_bseqs(paired, &mut bseqs);
+        self.align_bseqs(paired, softclip, threads, &mut bseqs);
         if let Some(sams) = bseqs.to_sams() {
             Ok(sams
                 .iter()
@@ -378,7 +385,7 @@ impl BwaAligner {
             .collect()
     }
 
-    fn align_bseqs(&self, paired: bool, bseqs: &mut BseqVec) {
+    fn align_bseqs(&self, paired: bool, softclip: bool, threads: usize, bseqs: &mut BseqVec) {
         unsafe {
             let r = *(self.reference.bwt_data);
             let mut settings = self.settings.bwa_settings;
@@ -387,6 +394,17 @@ impl BwaAligner {
             } else {
                 settings.flag &= !(bwa_sys::MEM_F_PE as i32);
             }
+            if softclip {
+                settings.flag |= bwa_sys::MEM_F_SOFTCLIP as i32;
+            } else {
+                settings.flag &= !(bwa_sys::MEM_F_SOFTCLIP as i32);
+            }
+            if threads > 1 {
+                settings.n_threads = threads as c_int;
+            } else {
+                settings.n_threads = 1;
+            }
+
             bwa_sys::mem_process_seqs(
                 &settings,
                 r.bwt,
@@ -431,7 +449,7 @@ impl BwaAligner {
         let read2 = fastq::Record::with_attrs(std::str::from_utf8(name).unwrap(), None, r2, q2);
 
         let reads = vec![read1, read2];
-        let aln = self.align_fastq_records_nested(&reads, true).unwrap();
+        let aln = self.align_fastq_records_nested(&reads, true, false, 0).unwrap();
         let mut it = aln.iter();
         (it.next().unwrap().to_vec(), it.next().unwrap().to_vec())
     }
@@ -587,7 +605,7 @@ mod tests {
     fn test_align_fastqs() {
         let records = read_fastq().unwrap();
         let bwa = load_aligner();
-        let recs = bwa.align_fastq_records(&records, true).unwrap();
+        let recs = bwa.align_fastq_records(&records, true, false, 1).unwrap();
         assert_eq!(recs[0].pos(), 1330);
     }
 
@@ -595,7 +613,7 @@ mod tests {
     fn test_do_reads_align() {
         let records = read_fastq().unwrap();
         let bwa = load_aligner();
-        let result = bwa.get_alignment_status(&records, true).unwrap();
+        let result = bwa.get_alignment_status(&records, true, false, 1).unwrap();
         assert!(result[0]);
         assert!(result[1]);
         assert!(result[2]);
@@ -616,7 +634,7 @@ mod tests {
     fn test_odd_paired_reads_throw_error() {
         let records = &read_fastq().unwrap()[..3];
         let bwa = load_aligner();
-        assert!(bwa.align_fastq_records(&records, true).is_err());
+        assert!(bwa.align_fastq_records(&records, true, false, 1).is_err());
     }
 
     #[test]
@@ -625,7 +643,7 @@ mod tests {
         let mut records_2 = read_fastq().unwrap().into_iter().skip(1).step_by(2).collect::<Vec<fastq::Record>>();
         records_1.append(&mut records_2);
         let bwa = load_aligner();
-        assert!(bwa.align_fastq_records(records_1.as_slice(), true).is_err());
+        assert!(bwa.align_fastq_records(records_1.as_slice(), true, false, 1).is_err());
     }
 
     #[test]
