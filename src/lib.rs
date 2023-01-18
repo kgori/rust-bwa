@@ -17,6 +17,41 @@
 //! let (r1_alns, _r2_alns) = bwa.align_read_pair(b"read_name", r1, q1, r2, q2);
 //! println!("r1 mapping -- tid: {}, pos: {}", r1_alns[0].tid(), r1_alns[0].pos());
 //! ```
+//! Align a collection of fastq Records.
+//!
+//! ```
+//! extern crate bio;
+//! extern crate rust_htslib;
+//!
+//! use bio::io::fastq;
+//! use rust_htslib::bam;
+//!
+//! use bwa::BwaAligner;
+//!
+//! let aligner = BwaAligner::from_path(&"tests/test_ref.fa").unwrap();
+//! let bam_header = aligner.create_bam_header();
+//!
+//! let seqs = vec![
+//!     fastq::Record::with_attrs(
+//!         "id",
+//!         Some("/1"), // optional description, ignored by BWA
+//!         b"TCATTGCTTATTATGTTCATCCCGTCAACATTCAAACGGCCTGTCTCATCATGGAAGGCGCTGAATTTAC",
+//!         b"JJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJJ",
+//!     ),
+//!     fastq::Record::with_attrs(
+//!         "id",
+//!         Some("/2"),
+//!         b"GGAAAACATTATTAATGGCGTCGAGCGTCCGGTTAAAGCCGCTGAATTGTTCGCGTTTACCTTGCGTGTA",
+//!         b"IIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII",
+//!         ),
+//!     ];
+//!
+//! let alns = aligner
+//!     .align_fastq_records_nested(&seqs, /* paired */ true)
+//!     .unwrap();
+//! assert!(alns[0][0].pos() == 630);
+//! assert!(alns[1][0].pos() == 700);
+//! ```
 
 #![allow(non_upper_case_globals)]
 #![allow(non_camel_case_types)]
@@ -260,8 +295,8 @@ impl BwaAligner {
         self.reference.create_bam_header()
     }
 
-    /// Align an array of bio::io::fastq::Records to the reference and return a Vec<bool>
-    /// to indicate whether each fastq::Record mapped to the reference (true) or was
+    /// Align an array of `bio::io::fastq::Records` to the reference and return a `Vec<bool>`
+    /// to indicate whether each `fastq::Record` mapped to the reference (true) or was
     /// unmapped (false).
     pub fn get_alignment_status(
         &self,
@@ -298,8 +333,8 @@ impl BwaAligner {
         Ok(())
     }
 
-    /// Align an array of bio::io::fastq::Records to the reference and return a Vec
-    /// of alignments as rust_htslib::bam::Records
+    /// Align an array of `bio::io::fastq::Records` to the reference and return a Vec
+    /// of alignments as `rust_htslib::bam::Records`.
     pub fn align_fastq_records(
         &self,
         records: &[fastq::Record],
@@ -316,8 +351,8 @@ impl BwaAligner {
         }
     }
 
-    /// Align an array of fastq records to the reference and return a Vec
-    /// of subalignments for each fastq::record as a Vec of bam::Records.
+    /// Align an array of `bio::io::fastq::Records` records to the reference and return a Vec
+    /// of subalignments for each `fastq::record` as a Vec of `bam::Records`.
     pub fn align_fastq_records_nested(
         &self,
         records: &[fastq::Record],
