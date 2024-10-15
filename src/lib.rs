@@ -324,12 +324,22 @@ impl BwaAligner {
         }
     }
 
+    /// Removes any whitespace or comments from the read ID
+    fn strip_comment(id: &str) -> Option<&str> {
+        id.split_whitespace().next()
+    }
+
+    /// Compares the IDs of two reads, ignoring any comments or additional text
+    fn read_ids_differ(id1: &str, id2: &str) -> bool {
+        Self::strip_comment(id1) != Self::strip_comment(id2)
+    }
+
     fn validate_paired_records(records: &[fastq::Record], paired: bool) -> Result<(), BwaAlignmentError> {
         if paired {
             if records.len() & 1 == 1 {
                 return Err(BwaAlignmentError("Expected an even number of paired reads".to_string()));
             }
-            if records.chunks(2).any(|a| a[0].id() != a[1].id()) {
+            if records.chunks(2).any(|a| Self::read_ids_differ(a[0].id(), a[1].id())) {
                 return Err(BwaAlignmentError("Paired read names don't match".to_string()));
             }
         }
@@ -654,5 +664,46 @@ mod tests {
             bwa.create_bam_header().to_bytes().as_slice(),
             &hdr[..]
         );
+    }
+
+    #[test]
+    fn test_validation_of_paired_reads() {
+        let read1 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let read2 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let records = [read1, read2];
+        assert!(BwaAligner::validate_paired_records(&records, true).is_ok());
+    }
+
+    #[test]
+    fn test_validation_of_paired_reads_with_comments() {
+        let read1 = fastq::Record::with_attrs("id\t12345", None, b"ACGT", b"IIII");
+        let read2 = fastq::Record::with_attrs("id\t67890", None, b"ACGT", b"IIII");
+        let records = [read1, read2];
+        assert!(BwaAligner::validate_paired_records(&records, true).is_ok());
+    }
+
+    #[test]
+    fn test_reject_odd_number_of_paired_reads() {
+        let read1 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let read2 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let read3 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let records = [read1, read2, read3];
+        assert!(BwaAligner::validate_paired_records(&records, true).is_err());
+    }
+
+    #[test]
+    fn test_reject_paired_reads_with_different_ids() {
+        let read1 = fastq::Record::with_attrs("id", None, b"ACGT", b"IIII");
+        let read2 = fastq::Record::with_attrs("xx", None, b"ACGT", b"IIII");
+        let records = [read1, read2];
+        assert!(BwaAligner::validate_paired_records(&records, true).is_err());
+    }
+
+    #[test]
+    fn test_reject_paired_reads_with_different_ids_with_comments() {
+        let read1 = fastq::Record::with_attrs("id\tRG:86", None, b"ACGT", b"IIII");
+        let read2 = fastq::Record::with_attrs("xx\tRG:86", None, b"ACGT", b"IIII");
+        let records = [read1, read2];
+        assert!(BwaAligner::validate_paired_records(&records, true).is_err());
     }
 }
