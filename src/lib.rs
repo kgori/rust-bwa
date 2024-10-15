@@ -306,7 +306,7 @@ impl BwaAligner {
         softclip: bool,
         threads: usize,
     ) -> Result<Vec<bool>, BwaAlignmentError> {
-        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records)?;
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, softclip, threads, &mut bseqs);
 
@@ -356,7 +356,7 @@ impl BwaAligner {
         threads: usize,
     ) -> Result<Vec<Record>, BwaAlignmentError> {
         Self::validate_paired_records(records, paired)?;
-        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records)?;
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, softclip, threads, &mut bseqs);
         if let Some(sams) = bseqs.to_sams() {
@@ -376,7 +376,7 @@ impl BwaAligner {
         threads: usize,
     ) -> Result<Vec<Vec<Record>>, BwaAlignmentError> {
         Self::validate_paired_records(records, paired)?;
-        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records);
+        let (cnames, mut vseqs, mut vquals) = Self::extract_fastqs(records)?;
         let mut bseqs = BseqVec::new(cnames, &mut vseqs, &mut vquals);
         self.align_bseqs(paired, softclip, threads, &mut bseqs);
         if let Some(sams) = bseqs.to_sams() {
@@ -429,20 +429,24 @@ impl BwaAligner {
         bseqs.aligned = true;
     }
 
-    fn extract_fastqs(records: &[fastq::Record]) -> (Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>) {
+    fn extract_fastqs(records: &[fastq::Record]) -> Result<(Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>), BwaAlignmentError> {
         let cnames = records
             .iter()
-            .map(|rec| CString::new(rec.id()).unwrap().into_raw())
-            .collect::<Vec<_>>();
+            .map(|rec| {
+                let id = Self::strip_comment(rec.id()).ok_or(BwaAlignmentError("Record has no ID".to_string()))?;
+                let c_string = CString::new(id).map_err(|e| BwaAlignmentError(e.to_string()))?;
+                Ok(c_string.into_raw())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let vseqs = records
             .iter()
-            .map(|rec| Vec::from(rec.seq()))
-            .collect::<Vec<_>>();
+            .map(|rec| Ok(Vec::from(rec.seq())))
+            .collect::<Result<Vec<_>, _>>()?;
         let vquals = records
             .iter()
-            .map(|rec| Vec::from(rec.qual()))
-            .collect::<Vec<_>>();
-        (cnames, vseqs, vquals)
+            .map(|rec| Ok(Vec::from(rec.qual())))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok((cnames, vseqs, vquals))
     }
 
     /// Align a read-pair to the reference.
