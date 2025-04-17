@@ -435,7 +435,7 @@ impl BwaAligner {
             .map(|rec| {
                 let id = Self::strip_comment(rec.id()).ok_or(BwaAlignmentError("Record has no ID".to_string()))?;
                 let c_string = CString::new(id).map_err(|e| BwaAlignmentError(e.to_string()))?;
-                Ok(c_string.into_raw())
+                Ok(c_string.into_raw()) // freed on Drop via CString::from_raw()
             })
             .collect::<Result<Vec<_>, _>>()?;
         let vseqs = records
@@ -530,9 +530,15 @@ impl Drop for BseqVec {
     fn drop(&mut self) {
         for bseq in &self.inner {
             unsafe {
-                libc::free(bseq.name as *mut libc::c_void);
-                libc::free(bseq.sam as *mut libc::c_void);
-                libc::free(bseq.comment as *mut libc::c_void);
+                if !bseq.name.is_null() {
+                    let _ = CString::from_raw(bseq.name);
+                }
+                if !bseq.sam.is_null() {
+                    libc::free(bseq.sam as *mut libc::c_void);
+                }
+                if !bseq.comment.is_null() {
+                    libc::free(bseq.comment as *mut libc::c_void);
+                }
             }
         }
     }
