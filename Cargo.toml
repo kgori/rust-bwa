@@ -1,6 +1,6 @@
 [package]
 name = "bwa"
-version = "0.1.2"
+version = "0.1.4"
 authors = ["Patrick Marks <patrick@10xgenomics.com>"]
 license = "MIT"
 
