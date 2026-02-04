@@ -2,6 +2,7 @@
 const FILES: &[&str] = &[
     "bwa/utils.c",
     "bwa/kthread.c",
+    "bwa/kstring.c",
     "bwa/ksw.c",
     "bwa/bwt.c",
     "bwa/bntseq.c",
@@ -26,6 +27,10 @@ const HEADERS: &[&str] = &[
     "bwa/ksw.h",
     "bwa/kvec.h",
     "bwa/malloc_wrap.h",
+    "bwa/QSufSort.h",
+    "bwa/rle.h",
+    "bwa/rope.h",
+    "bwa/scalar_sse.h",
     "bwa/utils.h",
 ];
 
