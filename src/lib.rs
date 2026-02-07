@@ -73,8 +73,8 @@ use rust_htslib::bam::record::Record;
 use rust_htslib::bam::HeaderView;
 
 use bio::io::fastq;
-use libc::c_int;
 use bwa_sys::bseq1_t;
+use libc::c_int;
 
 // include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 
@@ -334,13 +334,23 @@ impl BwaAligner {
         Self::strip_comment(id1) != Self::strip_comment(id2)
     }
 
-    fn validate_paired_records(records: &[fastq::Record], paired: bool) -> Result<(), BwaAlignmentError> {
+    fn validate_paired_records(
+        records: &[fastq::Record],
+        paired: bool,
+    ) -> Result<(), BwaAlignmentError> {
         if paired {
             if records.len() & 1 == 1 {
-                return Err(BwaAlignmentError("Expected an even number of paired reads".to_string()));
+                return Err(BwaAlignmentError(
+                    "Expected an even number of paired reads".to_string(),
+                ));
             }
-            if records.chunks(2).any(|a| Self::read_ids_differ(a[0].id(), a[1].id())) {
-                return Err(BwaAlignmentError("Paired read names don't match".to_string()));
+            if records
+                .chunks(2)
+                .any(|a| Self::read_ids_differ(a[0].id(), a[1].id()))
+            {
+                return Err(BwaAlignmentError(
+                    "Paired read names don't match".to_string(),
+                ));
             }
         }
         Ok(())
@@ -429,11 +439,14 @@ impl BwaAligner {
         bseqs.aligned = true;
     }
 
-    fn extract_fastqs(records: &[fastq::Record]) -> Result<(Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>), BwaAlignmentError> {
+    fn extract_fastqs(
+        records: &[fastq::Record],
+    ) -> Result<(Vec<*mut c_char>, Vec<Vec<u8>>, Vec<Vec<u8>>), BwaAlignmentError> {
         let cnames = records
             .iter()
             .map(|rec| {
-                let id = Self::strip_comment(rec.id()).ok_or(BwaAlignmentError("Record has no ID".to_string()))?;
+                let id = Self::strip_comment(rec.id())
+                    .ok_or(BwaAlignmentError("Record has no ID".to_string()))?;
                 let c_string = CString::new(id).map_err(|e| BwaAlignmentError(e.to_string()))?;
                 Ok(c_string.into_raw()) // freed on Drop via CString::from_raw()
             })
@@ -463,7 +476,9 @@ impl BwaAligner {
         let read2 = fastq::Record::with_attrs(std::str::from_utf8(name).unwrap(), None, r2, q2);
 
         let reads = vec![read1, read2];
-        let aln = self.align_fastq_records_nested(&reads, true, false, 0).unwrap();
+        let aln = self
+            .align_fastq_records_nested(&reads, true, false, 0)
+            .unwrap();
         let mut it = aln.iter();
         (it.next().unwrap().to_vec(), it.next().unwrap().to_vec())
     }
@@ -498,8 +513,8 @@ impl BseqVec {
             let bseq = bwa_sys::bseq1_t {
                 l_seq: seqs[i].len() as i32,
                 name: names[i],
-                seq: seqs[i].as_mut_ptr() as *mut i8,
-                qual: quals[i].as_mut_ptr() as *mut i8,
+                seq: seqs[i].as_mut_ptr() as *mut c_char,
+                qual: quals[i].as_mut_ptr() as *mut c_char,
                 comment: std::ptr::null_mut(),
                 id: i as i32,
                 sam: std::ptr::null_mut(),
@@ -659,21 +674,29 @@ mod tests {
 
     #[test]
     fn test_unordered_reads_throw_error() {
-        let mut records_1 = read_fastq().unwrap().into_iter().step_by(2).collect::<Vec<fastq::Record>>();
-        let mut records_2 = read_fastq().unwrap().into_iter().skip(1).step_by(2).collect::<Vec<fastq::Record>>();
+        let mut records_1 = read_fastq()
+            .unwrap()
+            .into_iter()
+            .step_by(2)
+            .collect::<Vec<fastq::Record>>();
+        let mut records_2 = read_fastq()
+            .unwrap()
+            .into_iter()
+            .skip(1)
+            .step_by(2)
+            .collect::<Vec<fastq::Record>>();
         records_1.append(&mut records_2);
         let bwa = load_aligner();
-        assert!(bwa.align_fastq_records(records_1.as_slice(), true, false, 1).is_err());
+        assert!(bwa
+            .align_fastq_records(records_1.as_slice(), true, false, 1)
+            .is_err());
     }
 
     #[test]
     fn test_aligner_can_generate_header() {
         let bwa = load_aligner();
         let hdr = b"@SQ\tSN:PhiX\tLN:5386\n@SQ\tSN:chr\tLN:4639675";
-        assert_eq!(
-            bwa.create_bam_header().to_bytes().as_slice(),
-            &hdr[..]
-        );
+        assert_eq!(bwa.create_bam_header().to_bytes().as_slice(), &hdr[..]);
     }
 
     #[test]

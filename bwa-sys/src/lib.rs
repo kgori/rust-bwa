@@ -1564,25 +1564,21 @@ fn bindgen_test_layout_mem_alnreg_t() {
 impl mem_alnreg_t {
     #[inline]
     pub fn n_comp(&self) -> ::std::os::raw::c_int {
-        unsafe { ::std::mem::transmute(self._bitfield_1.get(0usize, 30u8) as u32) }
+        (self._bitfield_1.get(0usize, 30u8) as u32) as ::std::os::raw::c_int
     }
     #[inline]
     pub fn set_n_comp(&mut self, val: ::std::os::raw::c_int) {
-        unsafe {
-            let val: u32 = ::std::mem::transmute(val);
-            self._bitfield_1.set(0usize, 30u8, val as u64)
-        }
+        let val: u32 = val as u32;
+        self._bitfield_1.set(0usize, 30u8, val as u64)
     }
     #[inline]
     pub fn is_alt(&self) -> ::std::os::raw::c_int {
-        unsafe { ::std::mem::transmute(self._bitfield_1.get(30usize, 2u8) as u32) }
+        (self._bitfield_1.get(30usize, 2u8) as u32) as ::std::os::raw::c_int
     }
     #[inline]
     pub fn set_is_alt(&mut self, val: ::std::os::raw::c_int) {
-        unsafe {
-            let val: u32 = ::std::mem::transmute(val);
-            self._bitfield_1.set(30usize, 2u8, val as u64)
-        }
+        let val: u32 = val as u32;
+        self._bitfield_1.set(30usize, 2u8, val as u64)
     }
     #[inline]
     pub fn new_bitfield_1(
@@ -1591,11 +1587,11 @@ impl mem_alnreg_t {
     ) -> __BindgenBitfieldUnit<[u8; 4usize]> {
         let mut __bindgen_bitfield_unit: __BindgenBitfieldUnit<[u8; 4usize]> = Default::default();
         __bindgen_bitfield_unit.set(0usize, 30u8, {
-            let n_comp: u32 = unsafe { ::std::mem::transmute(n_comp) };
+            let n_comp: u32 = n_comp as u32;
             n_comp as u64
         });
         __bindgen_bitfield_unit.set(30usize, 2u8, {
-            let is_alt: u32 = unsafe { ::std::mem::transmute(is_alt) };
+            let is_alt: u32 = is_alt as u32;
             is_alt as u64
         });
         __bindgen_bitfield_unit
